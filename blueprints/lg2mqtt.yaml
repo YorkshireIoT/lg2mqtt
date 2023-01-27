@@ -1,0 +1,57 @@
+blueprint:
+  name: LG2MQTT App Auto Start
+  description: Open the LG2MQTT app when the TV powers up.
+  domain: automation
+  input:
+    tv_device:
+      name: LG TV
+      description: The LG TV the LG2MQTT app is installed on.
+      selector:
+        entity:
+          domain: media_player
+          integration: webostv
+          multiple: false
+    delay:
+      name: Delay (seconds)
+      default: 5
+      description: The delay in seconds between performing the actions.
+        Increase this if service is not starting in time.
+        Good starting point is 5 seconds.
+      selector:
+        number:
+          min: 2
+          max: 30
+          unit_of_measurement: "seconds"
+          mode: slider
+          step: 1
+    startup_app:
+      name: Startup App (optional)
+      description: App to open after opening the LG2MQTT app. This can be considered the default
+        app you want to see at startup when turning on the TV. MUST match sources listed in source_list
+        (see Developer Tools->States for complete list.)
+      default: "Home Dashboard"
+      selector:
+        text:
+          multiline: false
+trigger:
+  - platform: state
+    entity_id: !input tv_device
+    from: "off"
+    to: "on"
+condition: []
+action:
+  - delay:
+      seconds: !input delay
+  - service: media_player.select_source
+    data:
+      source: LG 2 MQTT
+    target:
+      entity_id: !input tv_device
+  - delay:
+      seconds: !input delay
+  - service: media_player.select_source
+    data:
+      source: !input startup_app
+    target:
+      entity_id: !input tv_device
+mode: single
