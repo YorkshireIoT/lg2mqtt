@@ -1,3 +1,4 @@
+document.addEventListener("webOSLaunch", start, true);
 function start() {
     try {
         webOS.service.request("luna://com.slg.tv.service/", {
