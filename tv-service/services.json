@@ -1,9 +1,9 @@
 {
-  "id": "com.slg.tv.service",
+  "id": "com.yorkshireiot.lg2mqtt.service",
   "description": "MQTT TV Service",
   "services": [
     {
-      "name": "com.slg.tv.service"
+      "name": "com.yorkshireiot.lg2mqtt.service"
     }
   ]
 }

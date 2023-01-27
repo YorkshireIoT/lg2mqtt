@@ -1,21 +1,54 @@
 const pkgInfo = require('./package.json');
 const Service = require('webos-service');
 const mqtt = require('mqtt');
-const {log, getLogs, clearLogs} = require("./log");
+const { log, getLogs, clearLogs } = require("./log");
 
 // CHANGE THESE VALUES ACCORDINGLY
 const host = 'YOUR MQTT BROKER HOST';
 const port = '1883'; // OR THE PORT OF THE BROKER
 const username = 'YOUR MQTT USERNAME';
 const password = 'YOUR MQTT PASSWORD';
+// This should be unique across the MQTT network. If you're using this on multiple TVs, update this
+const deviceID = 'webOSTVService'
 
 const service = new Service(pkgInfo.name); // Create service by service name on package.json
 const clientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const connectUrl = `mqtt://${host}:${port}`;
 
-const topicPlayState = 'tv-service/playState';
-const topicAppId = 'tv-service/appId';
-const topicType = 'tv-service/type';
+// MQTT auto-discovery configuration
+const topicAutoDiscoveryPlayState = `homeassistant/sensor/${deviceID}/playState/config`;
+const topicAutoDiscoveryAppId = `homeassistant/sensor/${deviceID}/appId/config`;
+const topicAutoDiscoveryType = `homeassistant/sensor/${deviceID}/type/config`;
+
+const topicAvailability = `LG2MQTT/${deviceID}/availability`;
+const topicState = `LG2MQTT/${deviceID}/state`;
+
+function createAutoDiscoveryConfig(icon, id, name) {
+    return {
+        "icon": `${icon}`,
+        "~": `LG2MQTT/${deviceID}/`,
+        "availability_topic": `${topicAvailability}`,
+        "state_topic": `${topicState}`,
+        "name": `${name}`,
+        "unique_id": `${deviceID}_${id}`,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "value_template": `{{ value_json.${id}}}`,
+        "device": {
+            "identifiers": `${deviceID}`,
+            "name": `${deviceID}`,
+            "manufacturer": "LG",
+        }
+    };
+}
+
+function createState(play, app, type) {
+    return {
+        'play': `${play}`,
+        'app': `${app}`,
+        'type': `${type}`
+    };
+}
 
 let keepAlive;
 
@@ -25,51 +58,166 @@ let state = 'NOT STARTED';
 
 service.register('start', function (message) {
     try {
-        log('starting service');
+        log('Starting service MQTT service...');
+
         // This tells the ActivityManager to keep the service running in the background, so the MQTT connection will be kept alive.
         service.activityManager.create('keepAlive', function (activity) {
             log('keepAlive created');
             keepAlive = activity;
         });
-        log('registered keepAlive');
+        log('Registered keepAlive.');
 
         // Connect to the MQTT broker
         const mqttConfig = {
             clientId,
             clean: true,
             connectTimeout: 4000,
+            keepalive: 180, // 3 minutes
             username,
             password,
-            reconnectPeriod: 1000,
+            reconnectPeriod: 10000, // 10 seconds
+            will: {
+                topic: topicAvailability,
+                payload: "offline",
+                retain: false,
+                qos: 0
+            }
         };
-        log(`connecting to mqtt server with: ${JSON.stringify(mqttConfig)}`);
-        client = mqtt.connect(connectUrl, mqttConfig);
-        log('connected to mqtt server');
 
-        log('subscribing to media service');
+        log(`Connecting to MQTT server with configuration:\n ${JSON.stringify(mqttConfig)}`);
+        client = mqtt.connect(connectUrl, mqttConfig);
+
+        log("MQTT connection successful!");
+
+        log("Sending Home Assistant auto-discovery configs..")
+        // Send the Home Assistant auto-discovery configs
+        try {
+            let pubOptions = { qos: 0, retain: true };
+            client.publish(topicAutoDiscoveryPlayState, JSON.stringify(createAutoDiscoveryConfig("mdi:play-pause", "play", "Play State")), pubOptions, function (err) {
+                if (err) {
+                    console.log(`An error occurred during publish to ${topicAutoDiscoveryPlayState}`);
+                } else {
+                    console.log(`Published successfully to ${topicAutoDiscoveryPlayState}`);
+                }
+            });
+
+            client.publish(topicAutoDiscoveryAppId, JSON.stringify(createAutoDiscoveryConfig("mdi:apps", "app", "Application ID")), pubOptions, function (err) {
+                if (err) {
+                    console.log(`An error occurred during publish to ${topicAutoDiscoveryAppId}`);
+                } else {
+                    console.log(`Published successfully to ${topicAutoDiscoveryAppId}`);
+                }
+            });
+
+            client.publish(topicAutoDiscoveryType, JSON.stringify(createAutoDiscoveryConfig("mdi:import", "type", "Discovery Type")), pubOptions, function (err) {
+                if (err) {
+                    console.log(`An error occurred during publish to ${topicAutoDiscoveryType}`);
+                } else {
+                    console.log(`Published successfully to ${topicAutoDiscoveryType}`);
+                }
+            });
+        }
+        catch (e) {
+            log("Failed to publish Home Assistant Auto Discovery configs");
+            log(e);
+            message.respond({
+                started: false,
+                logs: getLogs(),
+            });
+            state = 'FAILED TO PUBLISH CONFIGS';
+            return;
+        }
+
+        // Publish initial state
+        try {
+            let pubOptions = { qos: 0, retain: false };
+            client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), pubOptions, function (err) {
+                if (err) {
+                    console.log(`An error occurred during publish to ${topicState}`);
+                } else {
+                    console.log(`Published successfully to ${topicState}`);
+                }
+            });
+        }
+        catch (e) {
+            log("Failed to send initial MQTT state");
+            log(e);
+            message.respond({
+                started: false,
+                logs: getLogs(),
+            });
+            state = 'FAILED TO PUBLISH INITIAL STATE';
+            return;
+        }
+
+        // Set availability to online
+        try {
+            let pubOptions = { qos: 0, retain: true };
+            client.publish(topicAvailability, "online", pubOptions, function (err) {
+                if (err) {
+                    console.log(`An error occurred during publish to ${topicAvailability}`);
+                } else {
+                    console.log(`Published successfully to ${topicAvailability}`);
+                }
+            });
+        }
+        catch (e) {
+            log("Failed to set availability to online");
+            log(e);
+            message.respond({
+                started: false,
+                logs: getLogs(),
+            });
+            state = 'FAILED TO SET ONLINE';
+            return;
+        }
+
+        log('Subscribing to media service');
         // Subscribe to the com.webos.media service, to receive updates from the tv
-        service.subscribe('luna://com.webos.media/getForegroundAppInfo', {'subscribe': true})
+        service.subscribe('luna://com.webos.media/getForegroundAppInfo', { 'subscribe': true })
             .on('response', function (message) {
                 if (message.payload && message.payload.foregroundAppInfo) {
                     if (Array.isArray(message.payload.foregroundAppInfo) && message.payload.foregroundAppInfo.length > 0) {
                         log(`send ForegroundAppInfo update to MQTT: ${JSON.stringify(message.payload)}`);
-                        client.publish(topicPlayState, `${message.payload.foregroundAppInfo[0].playState}`, {
-                            qos: 0,
-                            retain: false
-                        });
-                        client.publish(topicAppId, `${message.payload.foregroundAppInfo[0].appId}`, {
-                            qos: 0,
-                            retain: false
-                        });
-                        client.publish(topicType, `${message.payload.foregroundAppInfo[0].type}`, {
+                        client.publish(topicState, JSON.stringify(createState(`${message.payload.foregroundAppInfo[0].playState}`,
+                            `${message.payload.foregroundAppInfo[0].appId}`,
+                            `${message.payload.foregroundAppInfo[0].type}`)), {
                             qos: 0,
                             retain: false
                         });
                     } else {
                         log(`ignored ForegroundAppInfo because it's no array, or empty: ${JSON.stringify(message.payload)}`);
+                        client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), {
+                            qos: 0,
+                            retain: false
+                        });
                     }
                 } else {
                     log(`ignored ForegroundAppInfo because it contains no info: ${JSON.stringify(message)}`);
+                    client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), {
+                        qos: 0,
+                        retain: false
+                    });
+                }
+                try {
+                    let pubOptions = { qos: 0, retain: true };
+                    client.publish(topicAvailability, "online", pubOptions, function (err) {
+                        if (err) {
+                            console.log(`An error occurred during publish to ${topicAvailability}`);
+                        } else {
+                            console.log(`Published successfully to ${topicAvailability}`);
+                        }
+                    });
+                }
+                catch (e) {
+                    log("Failed to set availability to online");
+                    log(e);
+                    message.respond({
+                        started: false,
+                        logs: getLogs(),
+                    });
+                    state = 'FAILED TO SET ONLINE';
+                    return;
                 }
             });
 
