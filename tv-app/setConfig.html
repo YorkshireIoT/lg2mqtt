@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <link rel="stylesheet" href="styles.css">
+    <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV.js"></script>
+    <script type="text/javascript" src="js/script.js"></script>
+    <script defer src="js/setConfig.js"></script>
+    <title>Set MQTT Configuration</title>
+</head>
+
+<body>
+    <main id="main-holder">
+        <h1 id="login-header">MQTT Broker Configuration</h1>
+
+        <form id="login-form">
+            <div class="row">
+                <div class="column" style="flex:60%">
+                    <input type="url" name="host" id="username-field" class="login-form-field" placeholder="Host">
+                    <input type="number" name="port" value=1883 id="username-field" class="login-form-field" placeholder="Port">
+                    <input type="text" name="username" id="username-field" class="login-form-field" placeholder="User">
+                    <input type="password" name="password" id="password-field" class="login-form-field"
+                        placeholder="Password">
+                </div>
+                <div class="column" style="flex:40%;padding: 30px;">
+                    <input type="submit" value="Save" id="login-form-submit" style="font-size: 24px;">
+                    <p style="font-size: 24px; color: black">
+                        Leave password empty to disable password option.
+                    </p>
+                </div>
+            </div>
+        </form>
+
+        <div id="login-error-msg-holder">
+            <p id="login-error-title"></span></p>
+            <p id="login-error-msg"></span></p>
+        </div>
+    </main>
+</body>
+
+</html>

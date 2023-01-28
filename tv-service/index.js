@@ -3,17 +3,11 @@ const Service = require('webos-service');
 const mqtt = require('mqtt');
 const { log, getLogs, clearLogs } = require("./log");
 
-// CHANGE THESE VALUES ACCORDINGLY
-const host = 'YOUR MQTT BROKER HOST';
-const port = '1883'; // OR THE PORT OF THE BROKER
-const username = 'YOUR MQTT USERNAME';
-const password = 'YOUR MQTT PASSWORD';
 // This should be unique across the MQTT network. If you're using this on multiple TVs, update this
 const deviceID = 'webOSTVService'
 
 const service = new Service(pkgInfo.name); // Create service by service name on package.json
 const clientId = `mqtt_${Math.random().toString(16).slice(3)}`;
-const connectUrl = `mqtt://${host}:${port}`;
 
 // MQTT auto-discovery configuration
 const topicAutoDiscoveryPlayState = `homeassistant/sensor/${deviceID}/playState/config`;
@@ -50,11 +44,63 @@ function createState(play, app, type) {
     };
 }
 
+function publishAutoDiscoveryConfigs() {
+    let pubOptions = { qos: 0, retain: true };
+    client.publish(topicAutoDiscoveryPlayState, JSON.stringify(createAutoDiscoveryConfig("mdi:play-pause", "play", "Play State")), pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicAutoDiscoveryPlayState}`);
+        } else {
+            log(`Published successfully to ${topicAutoDiscoveryPlayState}`);
+        }
+    });
+
+    client.publish(topicAutoDiscoveryAppId, JSON.stringify(createAutoDiscoveryConfig("mdi:apps", "app", "Application ID")), pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicAutoDiscoveryAppId}`);
+        } else {
+            log(`Published successfully to ${topicAutoDiscoveryAppId}`);
+        }
+    });
+
+    client.publish(topicAutoDiscoveryType, JSON.stringify(createAutoDiscoveryConfig("mdi:import", "type", "Discovery Type")), pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicAutoDiscoveryType}`);
+        } else {
+            log(`Published successfully to ${topicAutoDiscoveryType}`);
+        }
+    });
+}
+
+function publishState(play, app, type) {
+    let pubOptions = { qos: 0, retain: false };
+    client.publish(topicState, JSON.stringify(createState(play, app, type)), pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicState}`);
+        } else {
+            log(`Published successfully to ${topicState}`);
+        }
+    });
+}
+
+function publishOnline() {
+    let pubOptions = { qos: 0, retain: true };
+    client.publish(topicAvailability, "online", pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicAvailability}`);
+        } else {
+            log(`Published successfully to ${topicAvailability}`);
+        }
+    });
+}
+
 let keepAlive;
-
 let client;
-
 let state = 'NOT STARTED';
+
+let host;
+let port;
+let username;
+let password;
 
 service.register('start', function (message) {
     try {
@@ -67,108 +113,97 @@ service.register('start', function (message) {
         });
         log('Registered keepAlive.');
 
-        // Connect to the MQTT broker
-        const mqttConfig = {
-            clientId,
-            clean: true,
-            connectTimeout: 4000,
-            keepalive: 180, // 3 minutes
-            username,
-            password,
-            reconnectPeriod: 10000, // 10 seconds
-            will: {
-                topic: topicAvailability,
-                payload: "offline",
-                retain: false,
-                qos: 0
-            }
-        };
-
-        log(`Connecting to MQTT server with configuration:\n ${JSON.stringify(mqttConfig)}`);
-        client = mqtt.connect(connectUrl, mqttConfig);
-
-        log("MQTT connection successful!");
-
-        log("Sending Home Assistant auto-discovery configs..")
-        // Send the Home Assistant auto-discovery configs
         try {
-            let pubOptions = { qos: 0, retain: true };
-            client.publish(topicAutoDiscoveryPlayState, JSON.stringify(createAutoDiscoveryConfig("mdi:play-pause", "play", "Play State")), pubOptions, function (err) {
-                if (err) {
-                    console.log(`An error occurred during publish to ${topicAutoDiscoveryPlayState}`);
-                } else {
-                    console.log(`Published successfully to ${topicAutoDiscoveryPlayState}`);
-                }
-            });
+            log("Retrieving MQTT configuration...");
 
-            client.publish(topicAutoDiscoveryAppId, JSON.stringify(createAutoDiscoveryConfig("mdi:apps", "app", "Application ID")), pubOptions, function (err) {
-                if (err) {
-                    console.log(`An error occurred during publish to ${topicAutoDiscoveryAppId}`);
-                } else {
-                    console.log(`Published successfully to ${topicAutoDiscoveryAppId}`);
-                }
-            });
+            // Try get the MQTT configuration from the database
+            service.call('luna://com.palm.db/find', {
+                "query": {
+                    "from": 'com.yorkshireiot.lg2mqtt:1'
+                },
+            }, function (message) {
+                // This will be done asynchronously with everything outside this function.
+                // At the very worst and error will be thrown inside the subscribe if
+                // this app is close and another starts publishing info before MQTT has connected.
+                // But as long as MQTT does successfully connect eventually everything should work fine.
+                if (message.payload.returnValue) {
+                    log("Got MQTT configuration: " + JSON.stringify(message.payload.results));
 
-            client.publish(topicAutoDiscoveryType, JSON.stringify(createAutoDiscoveryConfig("mdi:import", "type", "Discovery Type")), pubOptions, function (err) {
-                if (err) {
-                    console.log(`An error occurred during publish to ${topicAutoDiscoveryType}`);
-                } else {
-                    console.log(`Published successfully to ${topicAutoDiscoveryType}`);
+                    // Save the values into the global variables
+                    username = message.payload.results[0].username;
+                    password = message.payload.results[0].password;
+                    host = message.payload.results[0].host;
+                    port = message.payload.results[0].port;
+
+                    // At this point the MQTT config should be defined and ready to connect with
+                    connectUrl = `mqtt://${host}:${port}`;
+                    const mqttConfig = {
+                        clientId,
+                        clean: true,
+                        keepalive: 180, // 3 minutes
+                        username,
+                        password,
+                        will: {
+                            topic: topicAvailability,
+                            payload: "offline",
+                            retain: false,
+                            qos: 0
+                        }
+                    };
+
+                    log(`Connecting to MQTT server ${connectUrl} with configuration:\n ${JSON.stringify(mqttConfig)}`);
+                    client = mqtt.connect(connectUrl, mqttConfig);
+
+                    client.on('connect', function () {
+                        log("MQTT connected");
+                        state = 'MQTT CONNECTED'
+                    });
+
+                    client.on('error', function (error) {
+                        log("MQTT error");
+                        log(error);
+                        state = 'MQTT ERROR'
+                    });
+
+                    state = 'MQTT CONNECTING';
+
+                    log("Sending Home Assistant auto-discovery configs..");
+                    try {
+                        publishAutoDiscoveryConfigs();
+                    }
+                    catch (e) {
+                        throw new Error("Failed to publish auto-discovery configs.\n" + JSON.stringify(e));
+                    }
+
+                    // Publish initial state
+                    try {
+                        publishState('idle', 'unknown', 'unknown');
+                    }
+                    catch (e) {
+                        throw new Error("Failed to publish initial state.\n" + JSON.stringify(e));
+                    }
+
+                    // Set availability to online
+                    try {
+                        publishOnline();
+                    }
+                    catch (e) {
+                        throw new Error("Failed to publish 'online' to availability topic.\n" + JSON.stringify(e));
+                    }
+                }
+                else {
+                    throw new Error("Service call successful but db find returned error code" + JSON.stringify(message.payload));
                 }
             });
         }
         catch (e) {
-            log("Failed to publish Home Assistant Auto Discovery configs");
+            log("Failed to setup MQTT");
             log(e);
             message.respond({
                 started: false,
                 logs: getLogs(),
             });
-            state = 'FAILED TO PUBLISH CONFIGS';
-            return;
-        }
-
-        // Publish initial state
-        try {
-            let pubOptions = { qos: 0, retain: false };
-            client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), pubOptions, function (err) {
-                if (err) {
-                    console.log(`An error occurred during publish to ${topicState}`);
-                } else {
-                    console.log(`Published successfully to ${topicState}`);
-                }
-            });
-        }
-        catch (e) {
-            log("Failed to send initial MQTT state");
-            log(e);
-            message.respond({
-                started: false,
-                logs: getLogs(),
-            });
-            state = 'FAILED TO PUBLISH INITIAL STATE';
-            return;
-        }
-
-        // Set availability to online
-        try {
-            let pubOptions = { qos: 0, retain: true };
-            client.publish(topicAvailability, "online", pubOptions, function (err) {
-                if (err) {
-                    console.log(`An error occurred during publish to ${topicAvailability}`);
-                } else {
-                    console.log(`Published successfully to ${topicAvailability}`);
-                }
-            });
-        }
-        catch (e) {
-            log("Failed to set availability to online");
-            log(e);
-            message.respond({
-                started: false,
-                logs: getLogs(),
-            });
-            state = 'FAILED TO SET ONLINE';
+            state = 'FAILED TO SETUP MQTT';
             return;
         }
 
@@ -178,36 +213,20 @@ service.register('start', function (message) {
             .on('response', function (message) {
                 if (message.payload && message.payload.foregroundAppInfo) {
                     if (Array.isArray(message.payload.foregroundAppInfo) && message.payload.foregroundAppInfo.length > 0) {
-                        log(`send ForegroundAppInfo update to MQTT: ${JSON.stringify(message.payload)}`);
-                        client.publish(topicState, JSON.stringify(createState(`${message.payload.foregroundAppInfo[0].playState}`,
+                        log(`Sending ForegroundAppInfo update to MQTT: ${JSON.stringify(message.payload)}`);
+                        publishState(`${message.payload.foregroundAppInfo[0].playState}`,
                             `${message.payload.foregroundAppInfo[0].appId}`,
-                            `${message.payload.foregroundAppInfo[0].type}`)), {
-                            qos: 0,
-                            retain: false
-                        });
+                            `${message.payload.foregroundAppInfo[0].type}`);
                     } else {
-                        log(`ignored ForegroundAppInfo because it's no array, or empty: ${JSON.stringify(message.payload)}`);
-                        client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), {
-                            qos: 0,
-                            retain: false
-                        });
+                        log(`Ignored ForegroundAppInfo because it's no array, or empty: ${JSON.stringify(message.payload)}`);
+                        publishState('idle', 'unknown', 'unknown');
                     }
                 } else {
-                    log(`ignored ForegroundAppInfo because it contains no info: ${JSON.stringify(message)}`);
-                    client.publish(topicState, JSON.stringify(createState('idle', 'unknown', 'unknown')), {
-                        qos: 0,
-                        retain: false
-                    });
+                    log(`Ignored ForegroundAppInfo because it contains no info: ${JSON.stringify(message)}`);
+                    publishState('idle', 'unknown', 'unknown');
                 }
                 try {
-                    let pubOptions = { qos: 0, retain: true };
-                    client.publish(topicAvailability, "online", pubOptions, function (err) {
-                        if (err) {
-                            console.log(`An error occurred during publish to ${topicAvailability}`);
-                        } else {
-                            console.log(`Published successfully to ${topicAvailability}`);
-                        }
-                    });
+                    publishOnline();
                 }
                 catch (e) {
                     log("Failed to set availability to online");
@@ -222,14 +241,14 @@ service.register('start', function (message) {
             });
 
 
-        log('started service');
+        log('Started service');
         message.respond({
             started: true,
             logs: getLogs(),
         });
         state = 'STARTED';
     } catch (err) {
-        log(`failed starting: ${JSON.stringify(err)}`);
+        log(`Failed starting: ${JSON.stringify(err)}`);
         message.respond({
             started: false,
             logs: getLogs(),
@@ -240,15 +259,25 @@ service.register('start', function (message) {
 
 service.register('stop', function (message) {
     try {
-        log('stopping service');
+        log('Stopping service');
 
-        log('closing mqtt connection');
-        client.end();
+        log('Closing mqtt connection');
+        try {
+            client.end();
+        }
+        catch (e) {
+            log("Failed to close MQTT connection");
+            log(e);
+        }
 
-        log('complete keepAlive');
-        // When you're done, complete the activity
-        service.activityManager.complete(keepAlive);
-        log('completed keepAlive');
+        log('Ending keepAlive...');
+        try {
+            service.activityManager.complete(keepAlive);
+            log('completed keepAlive');
+        } catch (e) {
+            log("Failed to end keep alive");
+            log(e);
+        }
 
         message.respond({
             stopped: true,
@@ -256,7 +285,8 @@ service.register('stop', function (message) {
         });
         state = 'STOPPED';
     } catch (err) {
-        log(`failed stopping: ${JSON.stringify(err)}`);
+        log("Failed to stop service!");
+        log(err);
         message.respond({
             started: false,
             logs: getLogs(),
