@@ -93,6 +93,17 @@ function publishOnline() {
     });
 }
 
+function publishOffline() {
+    let pubOptions = { qos: 0, retain: true };
+    client.publish(topicAvailability, "offline", pubOptions, function (err) {
+        if (err) {
+            log(`An error occurred during publish to ${topicAvailability}`);
+        } else {
+            log(`Published successfully to ${topicAvailability}`);
+        }
+    });
+} 
+
 let keepAlive;
 let client;
 let state = 'NOT STARTED';
@@ -140,13 +151,13 @@ service.register('start', function (message) {
                     const mqttConfig = {
                         clientId,
                         clean: true,
-                        keepalive: 180, // 3 minutes
+                        keepalive: 60, // 3 minutes
                         username,
                         password,
                         will: {
                             topic: topicAvailability,
                             payload: "offline",
-                            retain: false,
+                            retain: true,
                             qos: 0
                         }
                     };
@@ -263,6 +274,8 @@ service.register('stop', function (message) {
 
         log('Closing mqtt connection');
         try {
+            // Broker doesn't seem to be sending offline message at client disconnect. Send manually
+            publishOffline();
             client.end();
         }
         catch (e) {
